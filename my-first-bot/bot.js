@@ -7,7 +7,11 @@ const jokes = require('./messages');
 const { getRandomJoke } = require('./utility');
 
 // основний бот
-const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
+const botToken = process.env.TELEGRAM_TOKEN || process.env.BOT_TOKEN;
+if (!botToken) {
+  console.error('TELEGRAM_TOKEN або BOT_TOKEN не встановлено. Бот не зможе запуститися.');
+}
+const bot = new Telegraf(botToken);
 
 // прості логи і лічильник запусків у data.json
 let data = { visits: 0, users: {} };
@@ -20,7 +24,11 @@ try {
 
 // сесії для кроків (імʼя/вік/місто, ігри тощо)
 const sessions = {};
+const paymentsProviderToken = process.env.PAYMENTS_PROVIDER_TOKEN;
 
+if (!paymentsProviderToken) {
+  console.warn('PAYMENTS_PROVIDER_TOKEN is not set. Donate button will not work.');
+}
 
 // /start – привітання, лічильник запусків, клавіатура Reply
 bot.start((ctx) => {
@@ -33,7 +41,7 @@ bot.start((ctx) => {
     {
       reply_markup: {
         keyboard: [
-          ['Інфо', 'Допомога'],
+          ['Інфо', 'Допомога', 'Пожертвувати'],
           ['Жарт', 'Кіт 🐱', 'Погода ☁️'],
           ['Міні-анкета', 'Гра число', 'Вікторина']
         ],
@@ -50,6 +58,7 @@ bot.help((ctx) => {
       'Доступні команди:',
       '/start – запустити бота',
       '/help – список команд',
+      '/donate – пожертвувати суму',
       '/joke – випадковий жарт',
       '/random – випадкова відповідь',
       '/quiz – вікторина з кнопками',
@@ -130,6 +139,18 @@ bot.on('text', (ctx) => {
     return;
   }
 
+  // якщо є активна сесія для пожертви
+  if (sessions[id]?.type === 'donation') {
+    const amount = parseFloat(text.replace(',', '.'));
+    if (Number.isNaN(amount) || amount <= 0) {
+      ctx.reply('Введи будь ласка позитивну суму у доларах США, наприклад 5 або 10.');
+      return;
+    }
+
+    delete sessions[id];
+    return sendDonationInvoice(ctx, Math.round(amount * 100) / 100);
+  }
+
   // якщо є активна сесія "гра число"
   if (sessions[id]?.type === 'guess') {
     const secret = sessions[id].secret;
@@ -159,7 +180,7 @@ bot.on('text', (ctx) => {
   if (text === 'Інфо') {
     ctx.reply(`Тебе звати ${ctx.from.first_name || 'користувач'}.\nТвій ID: ${ctx.from.id}`);
   } else if (text === 'Допомога') {
-    ctx.reply('Натисни "Жарт", "Кіт 🐱", "Погода ☁️", "Міні-анкета", "Гра число" або "Вікторина".');
+    ctx.reply('Натисни "Жарт", "Кіт 🐱", "Погода ☁️", "Міні-анкета", "Гра число", "Вікторина" або "Пожертвувати".');
   } else if (text === 'Жарт') {
     ctx.reply(getRandomJoke(jokes));
   } else if (text === 'Кіт 🐱') {
@@ -172,6 +193,8 @@ bot.on('text', (ctx) => {
     startGuessGame(ctx);
   } else if (text === 'Вікторина') {
     sendQuiz(ctx);
+  } else if (text === 'Пожертвувати') {
+    startDonation(ctx);
   } else {
     // будь-який інший довільний текст у "звичайному" режимі ігноруємо
     return;
@@ -246,6 +269,7 @@ async function handleWeather(ctx) {
 
 bot.command('cat', (ctx) => handleCat(ctx));
 bot.command('weather', (ctx) => handleWeather(ctx));
+bot.command('donate', (ctx) => startDonation(ctx));
 
 // ---- Сесії: міні-анкета за кроками (step 1/2/3) ----
 
@@ -254,6 +278,54 @@ function startForm(ctx) {
   sessions[id] = { type: 'form', step: 1 };
   ctx.reply('Як тебе звати?');
 }
+
+function startDonation(ctx) {
+  if (!paymentsProviderToken) {
+    ctx.reply(
+      'Платіжна система не налаштована. Додайте PAYMENTS_PROVIDER_TOKEN у файл .env.'
+    );
+    return;
+  }
+
+  const id = ctx.from.id;
+  sessions[id] = { type: 'donation', step: 1 };
+  ctx.reply('Введи суму пожертвування у доларах США (наприклад, 5 або 10).');
+}
+
+async function sendDonationInvoice(ctx, amount) {
+  const title = 'Пожертва боту';
+  const description = 'Дякуємо! Це демо-платіж через Stripe TEST provider.';
+  const payload = 'donation_payload_' + ctx.from.id + '_' + Date.now();
+  const currency = 'USD';
+  const prices = [{ label: 'Пожертва', amount: amount * 100 }];
+
+  try {
+    return await ctx.replyWithInvoice({
+      title,
+      description,
+      payload,
+      provider_token: paymentsProviderToken,
+      start_parameter: 'donation',
+      currency,
+      prices
+    });
+  } catch (error) {
+    console.error('Invoice send failed:', error);
+    ctx.reply(
+      'Не вдалося створити платіж. Будь ласка, перевірте налаштування PAYMENTS_PROVIDER_TOKEN і спробуйте знову.'
+    );
+  }
+}
+
+bot.on('pre_checkout_query', (ctx) => {
+  ctx.answerPreCheckoutQuery(true);
+});
+
+bot.on('successful_payment', (ctx) => {
+  ctx.reply(
+    'Дякуємо за пожертвування! Платіж успішно оброблено. Для демонстрації використано Stripe TEST provider.'
+  );
+});
 
 // ---- Гра "вгадай число" ----
 

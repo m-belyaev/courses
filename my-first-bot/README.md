@@ -5,7 +5,8 @@
 - Встанови залежності:
   - **npm**: `npm install`
 - Створи файл `.env` поруч із `package.json` (можеш скопіювати з `.env.example`) і задай:
-  - `BOT_TOKEN=токен_твого_бота`
+  - `TELEGRAM_TOKEN=токен_твого_бота` або `BOT_TOKEN=токен_твого_бота`
+  - `PAYMENTS_PROVIDER_TOKEN=токен_платежів_Stripe_TEST_provider`
 - Запуск:
   - **звичайний запуск**: `npm start`
   - **режим розробки з автоперезапуском**: `npm run dev`
